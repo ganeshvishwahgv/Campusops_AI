@@ -8,6 +8,8 @@ import { notifyRoles, operationsRoles } from "@/lib/notifications/service";
 import { ComplaintError } from "@/lib/complaints/validation";
 import { travelMs, type Repair } from "./repair";
 
+type Writer = Prisma.TransactionClient;
+
 const select = {
   id: true, incidentId: true, busId: true, busName: true, routeName: true, lat: true, lng: true, students: true, returnedAt: true,
   incident: { select: { status: true, resolvedAt: true, assignee: { select: { name: true } },
@@ -66,9 +68,10 @@ export async function reportBreakdown(user: Pick<CurrentUser, "id" | "name" | "r
   return db.$transaction(async (tx) => {
     const open = await tx.busBreakdown.findFirst({ where: { busId: report.busId, returnedAt: null }, select: { id: true, incidentId: true } });
     if (open) return { ...open, created: false };
-    const incidentId = `REQ-${randomBytes(8).toString("hex").toUpperCase()}`;
     const where = `${report.lat.toFixed(4)}, ${report.lng.toFixed(4)}`;
-    await tx.incident.create({ data: {
+    const existing = await findBusComplaint(tx, report.busId);
+    const incidentId = existing ?? `REQ-${randomBytes(8).toString("hex").toUpperCase()}`;
+    if (!existing) await tx.incident.create({ data: {
       id: incidentId, title: `${report.busName} broke down on ${report.routeName}`,
       description: `${report.busName} stopped ${report.source === "AUTO" ? "while running" : "and was reported by transport control"} with ${report.students} students on board (driver ${report.driver}). Location ${where}. Send a technician to repair the bus and bring it back to college.`,
       category: "TRANSPORT", priority: "HIGH", reportedUrgency: "HIGH", status: "REPORTED", reporterId: user.id, buildingId: "T",
@@ -90,6 +93,51 @@ export async function reportBreakdown(user: Pick<CurrentUser, "id" | "name" | "r
       body: `${report.routeName}. Assign a technician to ride out, repair it and bring it back to college.` }, user.id);
     return { ...row, created: true };
   }, { timeout: 10000, maxWait: 10000 });
+}
+
+/** "Bus 02", "bus 2", "bus no. 2" → "BUS-02". */
+export function busIdFromText(text: string): string | null {
+  const match = /\bbus\s*(?:no\.?\s*|number\s*|#\s*)?0*(\d{1,2})\b/i.exec(text);
+  return match ? `BUS-${match[1].padStart(2, "0")}` : null;
+}
+
+const openStatuses = { notIn: ["RESOLVED" as const, "CLOSED" as const] };
+
+/** An open transport complaint about this bus that is not yet tied to a breakdown, preferring one already in hand. */
+async function findBusComplaint(tx: Writer, busId: string) {
+  const rows = await tx.incident.findMany({
+    where: { category: "TRANSPORT", status: openStatuses, busBreakdown: null, createdAt: { gt: new Date(Date.now() - 2 * 86_400_000) } },
+    select: { id: true, title: true, description: true, assigneeId: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 50,
+  });
+  const matches = rows.filter((row) => busIdFromText(`${row.title} ${row.description}`) === busId);
+  return (matches.find((row) => row.assigneeId) ?? matches[0])?.id ?? null;
+}
+
+/**
+ * When operations work on a transport complaint that names a bus, move that bus's open breakdown
+ * onto it so the fleet map follows this job. The unstarted duplicate repair order is closed.
+ */
+export async function adoptBreakdown(tx: Writer, incidentId: string, actor: { id: string; name: string; role: Role }) {
+  const incident = await tx.incident.findUnique({ where: { id: incidentId }, select: { category: true, title: true, description: true, busBreakdown: { select: { id: true } } } });
+  if (!incident || incident.category !== "TRANSPORT" || incident.busBreakdown) return;
+  const busId = busIdFromText(`${incident.title} ${incident.description}`);
+  if (!busId) return;
+  const breakdown = await tx.busBreakdown.findFirst({ where: { busId, returnedAt: null },
+    select: { id: true, incident: { select: { id: true, status: true, assigneeId: true, version: true, category: true, priority: true } } } });
+  // Never take over a repair that someone is already working on.
+  if (!breakdown || breakdown.incident.assigneeId || !["REPORTED", "NEEDS_CLARIFICATION", "TRIAGED"].includes(breakdown.incident.status)) return;
+  const old = breakdown.incident;
+  await tx.busBreakdown.update({ where: { id: breakdown.id }, data: { incidentId } });
+  const note = `Duplicate of ${incidentId}; the bus repair continues there.`;
+  await tx.incident.update({ where: { id: old.id }, data: { status: "CLOSED", closedAt: new Date(), resolvedAt: new Date(), resolutionNote: note, version: { increment: 1 } } });
+  await tx.incidentEvent.create({ data: { incidentId: old.id, actorId: actor.id, actorName: actor.name, actorRole: actor.role, action: "CLOSE", note,
+    fromStatus: old.status, toStatus: "CLOSED", fromCategory: old.category, toCategory: old.category, fromPriority: old.priority, toPriority: old.priority, resultVersion: old.version + 1 } });
+}
+
+/** Students still waiting at a broken bus; only ever decreases, so every viewer converges on the same count. */
+export async function recordPickup(id: string, waiting: number) {
+  if (id.length > 100) throw new ComplaintError(404, "Breakdown not found.");
+  await db.busBreakdown.updateMany({ where: { id, students: { gt: waiting } }, data: { students: waiting } });
 }
 
 /** The stop position can be corrected on the map until a technician sets off. */

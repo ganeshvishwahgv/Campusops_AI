@@ -10,6 +10,7 @@ import { complaintErrorResponse, complaintSelect } from "@/lib/complaints/servic
 import { statusOptions } from "@/lib/complaints/types";
 import { validateAction, validateProfile, WorkflowError } from "./validation";
 import { notifyRoles, notifyUsers, operationsRoles } from "@/lib/notifications/service";
+import { adoptBreakdown } from "@/lib/transport/breakdowns";
 
 type Reader = Prisma.TransactionClient;
 export const activeStatuses: IncidentStatus[] = ["ASSIGNED", "IN_PROGRESS", "BLOCKED"];
@@ -225,6 +226,7 @@ export async function performAction(actorId: string, incidentId: string, request
       fromAssigneeName: current.assignee?.name ?? null, toAssigneeName: nextAssigneeName,
       requestKey, requestHash, resultVersion: input.expectedVersion + 1,
     } });
+    if (input.action === "ASSIGN" || input.action === "START") await adoptBreakdown(tx, incidentId, actor);
     await notifyWorkflow(tx, { action: input.action, incidentId, title: current.title, actor, note: input.note,
       newAssigneeId: input.action === "ASSIGN" ? input.assigneeId ?? null : null, previousAssigneeId: current.assignee?.id ?? null, queuedBehind });
     return { workOrder: await getWorkOrder(actor, incidentId, tx), replayed: false };

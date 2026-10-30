@@ -133,7 +133,7 @@ export default function FleetMap({ fleet, plans, selectedId, onSelect, onMoveBro
     const moves: { marker: Marker; from: [number, number]; to: [number, number] }[] = [];
     for (const rider of technicians) {
       const node = document.createElement("div");
-      node.style.cssText = "width:max-content;transform:translate(-50%,-50%);display:flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border-radius:999px;background:#4c1d95;color:white;border:2px solid white;box-shadow:0 2px 8px #0006;font:700 11px system-ui;white-space:nowrap;";
+      node.style.cssText = "width:max-content;transform:translate(-50%,-50%);display:flex;align-items:center;gap:4px;padding:3px 8px 3px 4px;border-radius:999px;background:#15803d;color:white;border:2px solid white;box-shadow:0 2px 8px #0006;font:700 11px system-ui;white-space:nowrap;";
       node.textContent = `${rider.repairing ? "🔧" : "🛵"} ${rider.name}${rider.repairing ? " · repairing" : ""}`;
       const icon = leaflet.divIcon({ html: node, className: "campusops-rider-marker", iconSize: [0, 0], iconAnchor: [0, 0] });
       let marker = riders.current.get(rider.id);

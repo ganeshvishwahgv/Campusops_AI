@@ -62,7 +62,8 @@ function applyRepairs(fleet: Bus[], repairs: Repair[], now: number, released: Se
       const t = rideProgress(repair.resolvedAt, repair.travelMs, now);
       return { ...bus, status: "RETURNING", lat: lerp(repair.lat, COLLEGE.lat, t), lng: lerp(repair.lng, COLLEGE.lng, t), rescueTarget: undefined };
     }
-    return bus.status === "RESCUING" ? bus : { ...bus, status: "BREAKDOWN", lat: repair.lat, lng: repair.lng };
+    if (bus.status === "RESCUING") return bus;
+    return { ...bus, status: "BREAKDOWN", lat: repair.lat, lng: repair.lng, occupied: Math.min(bus.occupied, repair.students) };
   });
 }
 
@@ -94,6 +95,7 @@ export default function TransportPanel({ canAssign = false }: { canAssign?: bool
   const offset = useRef(0);
   const released = useRef(new Set<string>());
   const phases = useRef(new Map<string, RepairPhase>());
+  const reported = useRef(new Map<string, number>());
   const pausedRef = useRef(paused);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
 
@@ -117,6 +119,13 @@ export default function TransportPanel({ canAssign = false }: { canAssign?: bool
       latest.current = next;
       setFleet(next);
       setNow(serverNow);
+      for (const repair of repairsRef.current) {
+        const bus = next.find((item) => item.id === repair.busId && item.status === "BREAKDOWN");
+        if (!bus || bus.occupied >= repair.students || reported.current.get(repair.id) === bus.occupied) continue;
+        reported.current.set(repair.id, bus.occupied);
+        void fetch(`/api/transport/breakdowns/${encodeURIComponent(repair.id)}/pickup`, { method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ waiting: bus.occupied }) }).catch(() => reported.current.delete(repair.id));
+      }
       if (arrivals.length) setEvents((list) => [...arrivals.map((text) => ({ at: clock(), text })), ...list].slice(0, 40));
     }, 1000);
     return () => clearInterval(t);
