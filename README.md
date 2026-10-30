@@ -1,4 +1,6 @@
-# CampusOps
+# Campusops_AI
+
+AI-powered campus management and resource optimization platform.
 
 Campus operations and recovery demonstration for Easwari Engineering College. The dashboard uses saved demo scenarios and submitted complaints, an approximate campus illustration, and Prisma 7 with SQLite.
 
