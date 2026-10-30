@@ -1,0 +1,339 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum Role {
+  STUDENT
+  FACULTY
+  TECHNICIAN
+  DEPARTMENT_MANAGER
+  FACILITIES_ADMIN
+  PROCUREMENT_APPROVER
+  SYSTEM_ADMIN
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  REPORTED
+  NEEDS_CLARIFICATION
+  TRIAGED
+  ASSIGNED
+  IN_PROGRESS
+  BLOCKED
+  RESOLVED
+  CLOSED
+}
+
+enum Availability {
+  AVAILABLE
+  UNAVAILABLE
+  MAINTENANCE
+}
+
+model User {
+  id         String   @id @default(cuid())
+  name       String
+  email      String   @unique
+  role       Role     @default(STUDENT)
+  department String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  credential        Credential?
+  sessions          Session[]
+  reportedIncidents Incident[] @relation("Reporter")
+  assignedIncidents Incident[] @relation("Assignee")
+  technicianProfile TechnicianProfile?
+  workflowEvents    IncidentEvent[]
+  roomBookings      RoomBooking[]
+  bookingEvents     BookingEvent[]
+  transportDemos    TransportDemo[]
+  transportEvents  TransportEvent[]
+}
+
+model Credential {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  userId       String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Persistent fixed-window login limits. Keys are hashes, never raw usernames.
+model LoginThrottle {
+  key       String   @id
+  attempts  Int
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model Building {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  mapX      Float    @default(0)
+  mapY      Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rooms     Room[]
+  incidents Incident[]
+}
+
+model Room {
+  id           String       @id @default(cuid())
+  code         String
+  name         String
+  floor        Int          @default(0)
+  capacity     Int
+  roomType     String       @default("CLASSROOM")
+  accessible   Boolean      @default(false)
+  hasProjector Boolean      @default(false)
+  availability Availability @default(AVAILABLE)
+  buildingId   String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  building  Building   @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  assets    Asset[]
+  incidents Incident[]
+
+  bookings  RoomBooking[]
+
+  @@unique([buildingId, code])
+  @@index([availability, capacity])
+}
+
+model Asset {
+  id           String       @id @default(cuid())
+  assetTag     String       @unique
+  name         String
+  category     String
+  availability Availability @default(AVAILABLE)
+  roomId       String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  room      Room       @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  incidents Incident[]
+}
+
+model Incident {
+  id              String         @id @default(cuid())
+  title           String
+  description     String
+  category        String         @default("UNCLASSIFIED")
+  priority        Priority       @default(MEDIUM)
+  reportedUrgency Priority?
+  submissionKey   String?
+  submissionHash  String?
+  status          IncidentStatus @default(REPORTED)
+  locationText    String?
+  summary         String?
+  blockedReason   String?
+  resolutionNote  String?
+  responseDueAt   DateTime?
+  resolutionDueAt DateTime?
+  respondedAt     DateTime?
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  version         Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  reporterId String
+  assigneeId String?
+  buildingId String?
+  roomId     String?
+  assetId    String?
+  busId      String?
+
+  reporter User      @relation("Reporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  assignee User?     @relation("Assignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  building Building? @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  room     Room?     @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  asset    Asset?    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  bus      Bus?      @relation(fields: [busId], references: [id], onDelete: Restrict)
+  history  IncidentEvent[]
+
+  @@index([status, priority])
+  @@index([buildingId])
+  @@index([assigneeId])
+  @@index([resolutionDueAt])
+  @@unique([reporterId, submissionKey])
+  @@index([reporterId, createdAt, id])
+  @@index([assigneeId, status])
+}
+
+model TechnicianProfile {
+  userId         String   @id
+  onDuty         Boolean  @default(false)
+  maxActiveJobs  Int      @default(3)
+  availableFrom DateTime?
+  availableUntil DateTime?
+  version        Int      @default(0)
+  updatedAt      DateTime @updatedAt
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skills         TechnicianSkill[]
+}
+
+model TechnicianSkill {
+  userId   String
+  category String
+  profile TechnicianProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@id([userId, category])
+}
+
+model IncidentEvent {
+  id                   String @id @default(cuid())
+  incidentId           String
+  actorId              String
+  actorName            String
+  actorRole            Role
+  action               String
+  note                 String
+  fromStatus           IncidentStatus?
+  toStatus             IncidentStatus
+  fromCategory         String?
+  toCategory           String
+  fromPriority         Priority?
+  toPriority           Priority
+  fromAssigneeName     String?
+  toAssigneeName       String?
+  resultVersion        Int
+  requestKey           String?
+  requestHash          String?
+  createdAt            DateTime @default(now())
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([actorId, requestKey])
+  @@index([incidentId, createdAt, id])
+}
+
+// SQLite write admission serializes capacity and eligibility checks across workers.
+model WorkflowLock {
+  id Int @id
+}
+
+model Bus {
+  id                 String       @id @default(cuid())
+  fleetCode          String       @unique
+  registrationNumber String       @unique
+  capacity           Int
+  availability       Availability @default(AVAILABLE)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  incidents Incident[]
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+model RoomBooking {
+  id              String @id @default(cuid())
+  title           String
+  purpose         String
+  roomId          String
+  ownerId         String
+  startsAt        DateTime
+  endsAt          DateTime
+  attendees       Int
+  needsAccessible Boolean @default(false)
+  needsProjector  Boolean @default(false)
+  status          BookingStatus @default(CONFIRMED)
+  version         Int @default(0)
+  cancelledAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  room            Room @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  owner           User @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  history         BookingEvent[]
+
+  @@index([roomId, status, startsAt, endsAt])
+  @@index([ownerId, startsAt, id])
+  @@index([status, startsAt, id])
+}
+
+model BookingEvent {
+  id            String @id @default(cuid())
+  bookingId     String
+  actorId       String
+  actorName     String
+  actorRole     Role
+  action        String
+  note          String
+  before        Json?
+  after         Json
+  resultVersion Int
+  requestKey    String
+  requestHash   String
+  createdAt     DateTime @default(now())
+  booking       RoomBooking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  actor         User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([actorId, requestKey])
+  @@index([bookingId, createdAt, id])
+}
+
+model TransportDemo {
+  id String @id @default(cuid())
+  state Json
+  version Int @default(0)
+  createdById String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  events TransportEvent[]
+}
+
+model TransportEvent {
+  id String @id @default(cuid())
+  demoId String
+  actorId String
+  actorName String
+  action String
+  note String
+  requestKey String
+  requestHash String
+  resultVersion Int
+  createdAt DateTime @default(now())
+  demo TransportDemo @relation(fields: [demoId], references: [id], onDelete: Restrict)
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  @@unique([actorId, requestKey])
+  @@index([demoId, createdAt, id])
+}
+
