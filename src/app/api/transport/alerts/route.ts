@@ -1,10 +1,10 @@
 import { authorizeTransport, checkMutationOrigin, privateJson, readJsonBody } from "@/lib/auth/http";
 import { complaintErrorResponse } from "@/lib/complaints/service";
 import { ComplaintError } from "@/lib/complaints/validation";
-import { db } from "@/lib/db";
-import { notifyRoles } from "@/lib/notifications/service";
+import { reportBreakdown } from "@/lib/transport/breakdowns";
 
-// Raised by the fleet view when a simulated bus breaks down while running.
+// Raised by the fleet view when a simulated bus breaks down. Opens a repair work order
+// for operations and alerts transport admins.
 export async function POST(request: Request) {
   try {
     const { user, response } = await authorizeTransport();
@@ -13,15 +13,13 @@ export async function POST(request: Request) {
     if (rejected) return rejected;
     const body = await readJsonBody(request, 4 * 1024);
     const text = (value: unknown, max: number) => typeof value === "string" && value.trim() && value.length <= max ? value.trim() : null;
-    const busName = text(body.busName, 40), routeName = text(body.routeName, 120), driver = text(body.driver, 80);
+    const busId = text(body.busId, 40), busName = text(body.busName, 40), routeName = text(body.routeName, 120), driver = text(body.driver, 80);
     const students = typeof body.students === "number" && Number.isInteger(body.students) && body.students >= 0 && body.students <= 200 ? body.students : null;
-    if (!busName || !routeName || !driver || students === null || (body.source !== "AUTO" && body.source !== "MANUAL")) throw new ComplaintError(400, "Send the broken bus details.");
-    // A breakdown detected by the system alerts every transport admin; a manual report skips the reporter.
-    await db.$transaction((tx) => notifyRoles(tx, ["TRANSPORT_ADMIN"], {
-      kind: "BUS_BREAKDOWN", link: "/transport",
-      title: `${busName} broke down on ${routeName}`,
-      body: `${students} student${students === 1 ? "" : "s"} on board · driver ${driver}. ${body.source === "AUTO" ? "Detected while the bus was running." : `Reported by ${user.name}.`} Open transport to dispatch nearby buses.`,
-    }, body.source === "MANUAL" ? user.id : undefined));
-    return privateJson({ ok: true });
+    const lat = typeof body.lat === "number" && Math.abs(body.lat) <= 90 ? body.lat : null;
+    const lng = typeof body.lng === "number" && Math.abs(body.lng) <= 180 ? body.lng : null;
+    if (!busId || !busName || !routeName || !driver || students === null || lat === null || lng === null || (body.source !== "AUTO" && body.source !== "MANUAL")) {
+      throw new ComplaintError(400, "Send the broken bus details.");
+    }
+    return privateJson(await reportBreakdown(user, { busId, busName, routeName, driver, students, lat, lng, source: body.source }));
   } catch (error) { return complaintErrorResponse(error); }
 }

@@ -25,4 +25,7 @@ Load the demo data once: `npm run db:team` (logins), `npm run db:rooms` (rooms),
 2. **GaneshVishwa** opens Work orders → the new report → *Assign technician / in-charge* → Harrish (shows "this would be queue #4") → Harrish's bell shows the job.
 3. **Harrish** sees the job at the end of his queue; opens his in-progress job INC-H01 → *Record resolution* → Jayavijaya's bell shows "Your reported issue is resolved" and admins are told to verify.
 4. **GaneshVishwa** verifies and closes INC-H04 (already resolved by Harrish).
-5. **Abirami** opens Transportation, ticks *Random breakdowns while driving* or reports one → bell alert → *Approve dispatch* for nearby buses.
+5. **Abirami** opens Transportation, ticks *Random breakdowns while driving* or reports one → bell alert → *Approve dispatch* for nearby buses to pick up the students.
+6. The breakdown opens a repair work order; **GaneshVishwa / Kavya** are notified and assign it to **Harrish**.
+7. **Harrish** starts the job → on the transport map a 🛵 scooter rides from the college to the bus (30–90 s).
+8. **Harrish** records the resolution → the bus turns green and drives back to college → **Abirami** gets "Bus is back at college". Transport admins cannot mark buses repaired themselves.

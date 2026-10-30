@@ -4,6 +4,7 @@ import { clearSessionCookie, getCurrentUser } from "@/lib/auth/session";
 import { complaintErrorResponse } from "@/lib/complaints/service";
 import { ComplaintError } from "@/lib/complaints/validation";
 import { listNotifications, markRead } from "@/lib/notifications/service";
+import { settleReturns } from "@/lib/transport/breakdowns";
 
 async function signedIn() {
   const user = await getCurrentUser();
@@ -18,6 +19,7 @@ export async function GET() {
   try {
     const { user, response } = await signedIn();
     if (response) return response;
+    await settleReturns();
     return privateJson(await listNotifications(user.id));
   } catch (error) { return complaintErrorResponse(error); }
 }

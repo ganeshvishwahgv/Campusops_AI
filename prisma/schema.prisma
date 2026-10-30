@@ -201,6 +201,7 @@ model Incident {
   asset    Asset?    @relation(fields: [assetId], references: [id], onDelete: Restrict)
   bus      Bus?      @relation(fields: [busId], references: [id], onDelete: Restrict)
   history  IncidentEvent[]
+  busBreakdown BusBreakdown?
 
   @@index([status, priority])
   @@index([buildingId])
@@ -354,3 +355,21 @@ model TransportEvent {
   @@index([demoId, createdAt, id])
 }
 
+
+// A simulated fleet bus that broke down. Its repair runs through the linked work order;
+// the fleet map reads this record so every viewer sees the same repair progress.
+model BusBreakdown {
+  id         String    @id @default(cuid())
+  incidentId String    @unique
+  busId      String
+  busName    String
+  routeName  String
+  lat        Float
+  lng        Float
+  students   Int
+  returnedAt DateTime?
+  createdAt  DateTime  @default(now())
+  incident   Incident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([busId, returnedAt])
+}

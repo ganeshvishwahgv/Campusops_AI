@@ -1,4 +1,5 @@
-export type BusStatus = "RUNNING" | "BREAKDOWN" | "RESCUING";
+// RETURNING: repaired and driving back to college; its position comes from the shared repair record.
+export type BusStatus = "RUNNING" | "BREAKDOWN" | "RESCUING" | "RETURNING";
 
 export interface Bus {
   id: string;
@@ -57,7 +58,7 @@ const STEP = 0.0003; // degrees per tick (~30 m)
 
 /** Move one bus a small step. Called every second. */
 export function stepBus(b: Bus): Bus {
-  if (b.status === "BREAKDOWN") return b;
+  if (b.status === "BREAKDOWN" || b.status === "RETURNING") return b;
 
   // Rescue bus heads straight to the broken-down bus
   if (b.status === "RESCUING" && b.rescueTarget) {

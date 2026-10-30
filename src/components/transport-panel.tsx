@@ -1,7 +1,10 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
-import { INITIAL_FLEET, stepBus, type Bus } from "@/lib/transport/fleet";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { COLLEGE, INITIAL_FLEET, stepBus, type Bus } from "@/lib/transport/fleet";
+import { repairPhase, rideProgress, type Repair, type RepairPhase } from "@/lib/transport/repair";
+import type { TechnicianMarker } from "./fleet-map";
 import type { RescuePlan } from "@/lib/transport/rescue";
 import type { TransportBrief } from "@/lib/ai/types";
 import { complaintRequest, requestError } from "./complaint-shared";
@@ -38,7 +41,41 @@ function tick(fleet: Bus[], log: (text: string) => void): Bus[] {
   return next;
 }
 
-export default function TransportPanel() {
+const lerp = (from: number, to: number, t: number) => from + (to - from) * t;
+
+/**
+ * Apply shared repair records on top of this browser's simulation, so every viewer sees
+ * the same broken bus, the technician's ride and the repaired bus driving back.
+ */
+function applyRepairs(fleet: Bus[], repairs: Repair[], now: number, released: Set<string>, log: (text: string) => void): Bus[] {
+  if (!repairs.length) return fleet;
+  return fleet.map((bus) => {
+    const repair = repairs.find((item) => item.busId === bus.id && !released.has(item.id));
+    if (!repair) return bus;
+    const phase = repairPhase(repair, now);
+    if (phase === "BACK_AT_COLLEGE") {
+      released.add(repair.id);
+      log(`✔ ${bus.name} is back at college after repair by ${repair.technician ?? "the technician"}.`);
+      return { ...bus, status: "RUNNING", lat: COLLEGE.lat, lng: COLLEGE.lng, wp: 0, occupied: 0, rescueTarget: undefined };
+    }
+    if (phase === "RETURNING") {
+      const t = rideProgress(repair.resolvedAt, repair.travelMs, now);
+      return { ...bus, status: "RETURNING", lat: lerp(repair.lat, COLLEGE.lat, t), lng: lerp(repair.lng, COLLEGE.lng, t), rescueTarget: undefined };
+    }
+    return bus.status === "RESCUING" ? bus : { ...bus, status: "BREAKDOWN", lat: repair.lat, lng: repair.lng };
+  });
+}
+
+const phaseText: Record<RepairPhase, (repair: Repair, now: number) => string> = {
+  AWAITING_TECHNICIAN: (r) => `Repair work order ${r.incidentId} sent to operations. Waiting for an admin to assign a technician.`,
+  ASSIGNED: (r) => `${r.technician} is assigned and will ride out when they start the job.`,
+  TECHNICIAN_EN_ROUTE: (r, now) => `🛵 ${r.technician} is riding out on a scooter, arriving in about ${Math.max(1, Math.round((Date.parse(r.startedAt!) + r.travelMs - now) / 1000))} s.`,
+  REPAIRING: (r) => `🔧 ${r.technician} is at the bus, repairing it.`,
+  RETURNING: (r, now) => `✔ Repaired by ${r.technician}. Driving back to college, about ${Math.max(1, Math.round((Date.parse(r.resolvedAt!) + r.travelMs - now) / 1000))} s to go.`,
+  BACK_AT_COLLEGE: () => "Back at college and in service.",
+};
+
+export default function TransportPanel({ canAssign = false }: { canAssign?: boolean }) {
   const [fleet, setFleet] = useState<Bus[]>(INITIAL_FLEET);
   const [plans, setPlans] = useState<Record<string, RescuePlan>>({});
   const [dispatched, setDispatched] = useState<string[]>([]);
@@ -49,8 +86,16 @@ export default function TransportPanel() {
   const [events, setEvents] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [randomBreakdowns, setRandomBreakdowns] = useState(false);
+  const [repairs, setRepairs] = useState<Repair[]>([]);
+  const [now, setNow] = useState(() => Date.now());
   const latest = useRef(fleet);
   useEffect(() => { latest.current = fleet; }, [fleet]);
+  const repairsRef = useRef<Repair[]>([]);
+  const offset = useRef(0);
+  const released = useRef(new Set<string>());
+  const phases = useRef(new Map<string, RepairPhase>());
+  const pausedRef = useRef(paused);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
 
   // Keep the interval's view of the fleet in step with user actions.
   function commit(next: Bus[]) {
@@ -62,28 +107,66 @@ export default function TransportPanel() {
     setEvents((list) => [{ at: clock(), text }, ...list].slice(0, 40));
   }
 
-  // Live movement simulation
+  // Live movement simulation; shared repair progress keeps moving even while paused.
   useEffect(() => {
-    if (paused) return;
     const t = setInterval(() => {
       const arrivals: string[] = [];
-      const next = tick(latest.current, (text) => arrivals.push(text));
+      const serverNow = Date.now() + offset.current;
+      const stepped = pausedRef.current ? latest.current : tick(latest.current, (text) => arrivals.push(text));
+      const next = applyRepairs(stepped, repairsRef.current, serverNow, released.current, (text) => arrivals.push(text));
       latest.current = next;
       setFleet(next);
+      setNow(serverNow);
       if (arrivals.length) setEvents((list) => [...arrivals.map((text) => ({ at: clock(), text })), ...list].slice(0, 40));
     }, 1000);
     return () => clearInterval(t);
-  }, [paused]);
+  }, []);
+
+  // Poll shared repair records (work orders drive them: assign → start → resolve).
+  const loadRepairs = useCallback(async () => {
+    try {
+      const result = await complaintRequest<{ repairs: Repair[]; serverNow: string }>("/api/transport/breakdowns");
+      offset.current = Date.parse(result.serverNow) - Date.now();
+      repairsRef.current = result.repairs;
+      setRepairs(result.repairs);
+      const at = Date.now() + offset.current;
+      for (const repair of result.repairs) {
+        const phase = repairPhase(repair, at);
+        const before = phases.current.get(repair.id);
+        if (before && before !== phase && phase !== "BACK_AT_COLLEGE") {
+          setEvents((list) => [{ at: clock(), text: `${repair.busName}: ${phaseText[phase](repair, at)}` }, ...list].slice(0, 40));
+        }
+        phases.current.set(repair.id, phase);
+      }
+    } catch { /* keep the last known repair state */ }
+  }, []);
+  useEffect(() => {
+    const first = window.setTimeout(() => void loadRepairs(), 0);
+    const timer = window.setInterval(() => void loadRepairs(), 4000);
+    return () => { window.clearTimeout(first); window.clearInterval(timer); };
+  }, [loadRepairs]);
+
+  const repairFor = (busId: string) => repairs.find((item) => item.busId === busId && !item.returnedAt);
+  const riders: TechnicianMarker[] = repairs.flatMap((repair) => {
+    const phase = repairPhase(repair, now);
+    if (phase !== "TECHNICIAN_EN_ROUTE" && phase !== "REPAIRING") return [];
+    const t = rideProgress(repair.startedAt, repair.travelMs, now);
+    // Park just beside the bus once arrived so both markers stay readable.
+    return [{ id: repair.id, name: repair.technician ?? "Technician", busName: repair.busName, repairing: phase === "REPAIRING",
+      lat: lerp(COLLEGE.lat, repair.lat, t) + (phase === "REPAIRING" ? 0.0012 : 0), lng: lerp(COLLEGE.lng, repair.lng, t) }];
+  });
+  const returning = repairs.filter((repair) => repairPhase(repair, now) === "RETURNING");
 
   const brokenBuses = fleet.filter((b) => b.status === "BREAKDOWN");
   const reportable = fleet.filter((b) => b.status === "RUNNING");
+  const beforeRide = (busId: string) => { const repair = repairFor(busId); return !repair || ["AWAITING_TECHNICIAN", "ASSIGNED"].includes(repairPhase(repair, now)); };
   const helpersFor = (id: string) => fleet.filter((b) => b.status === "RESCUING" && b.rescueTarget?.busId === id);
   // A broken bus can be dragged until its rescue is dispatched.
-  const movableIds = brokenBuses.filter((b) => !dispatched.includes(b.id)).map((b) => b.id);
+  const movableIds = brokenBuses.filter((b) => !dispatched.includes(b.id) && beforeRide(b.id)).map((b) => b.id);
   const totals = {
     passengers: fleet.reduce((sum, bus) => sum + bus.occupied, 0),
     seats: fleet.filter((bus) => bus.status !== "BREAKDOWN").reduce((sum, bus) => sum + bus.capacity, 0),
-    running: fleet.filter((bus) => bus.status !== "BREAKDOWN").length,
+    running: fleet.filter((bus) => bus.status !== "BREAKDOWN" && bus.status !== "RETURNING").length,
     stranded: brokenBuses.reduce((sum, bus) => sum + bus.occupied, 0),
   };
 
@@ -106,12 +189,16 @@ export default function TransportPanel() {
     } catch (cause) { setError(requestError(cause)); }
   }
 
-  // Tell transport admins (via notifications) that a bus has stopped.
-  function alertBreakdown(bus: Bus, source: "AUTO" | "MANUAL") {
-    void fetch("/api/transport/alerts", {
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ busName: bus.name, routeName: bus.routeName, driver: bus.driver, students: bus.occupied, source }),
-    }).catch(() => undefined);
+  // Record the breakdown: opens a repair work order and alerts transport admins.
+  async function alertBreakdown(bus: Bus, source: "AUTO" | "MANUAL") {
+    try {
+      const result = await complaintRequest<{ incidentId: string; created: boolean }>("/api/transport/alerts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ busId: bus.id, busName: bus.name, routeName: bus.routeName, driver: bus.driver, students: bus.occupied, lat: bus.lat, lng: bus.lng, source }),
+      });
+      if (result.created) log(`Repair work order ${result.incidentId} opened for ${bus.name}; operations have been asked to send a technician.`);
+      await loadRepairs();
+    } catch (cause) { setError(requestError(cause)); }
   }
 
   async function breakDown(busId: string, source: "AUTO" | "MANUAL") {
@@ -120,7 +207,7 @@ export default function TransportPanel() {
     const updated = latest.current.map((b) => (b.id === bus.id ? { ...b, status: "BREAKDOWN" as const } : b));
     commit(updated);
     log(source === "AUTO" ? `🚨 ${bus.name} broke down while running on ${bus.routeName} (${bus.occupied} students).` : `${bus.name} reported broken down with ${bus.occupied} students.`);
-    alertBreakdown(bus, source);
+    void alertBreakdown(bus, source);
     await refreshPending(updated, dispatched);
     if (selected === bus.id) {
       const nextRunning = updated.find((b) => b.status === "RUNNING");
@@ -154,9 +241,16 @@ export default function TransportPanel() {
 
   // Dragging a broken bus recalculates its plan from the new spot.
   async function moveBroken(id: string, lat: number, lng: number) {
-    if (dispatched.includes(id)) { commit([...latest.current]); return; }
+    if (dispatched.includes(id) || !beforeRide(id)) { commit([...latest.current]); return; }
     const updated = latest.current.map((b) => (b.id === id ? { ...b, lat, lng } : b));
     commit(updated);
+    const repair = repairFor(id);
+    if (repair) {
+      try {
+        await complaintRequest(`/api/transport/breakdowns/${encodeURIComponent(repair.id)}/location`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lat, lng }) });
+        await loadRepairs();
+      } catch (cause) { setError(requestError(cause)); }
+    }
     await refreshPending(updated, dispatched);
   }
 
@@ -189,15 +283,6 @@ export default function TransportPanel() {
     const done = dispatched.filter((id) => id !== brokenId);
     setDispatched(done);
     await refreshPending(latest.current, done);
-  }
-
-  function repaired(brokenId: string) {
-    const bus = latest.current.find((b) => b.id === brokenId);
-    commit(latest.current.map((b) => (b.id === brokenId ? { ...b, status: "RUNNING" as const } : b)));
-    setDispatched((list) => list.filter((id) => id !== brokenId));
-    setPlans((map) => { const next = { ...map }; delete next[brokenId]; return next; });
-    setBriefs((map) => { const next = { ...map }; delete next[brokenId]; return next; });
-    log(`${bus?.name} repaired and back in service${bus?.occupied ? ` with ${bus.occupied} students` : ""}.`);
   }
 
   async function requestBrief(brokenId: string) {
@@ -236,8 +321,8 @@ export default function TransportPanel() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
-          <FleetMap fleet={fleet} plans={Object.values(plans).filter((plan) => !dispatched.includes(plan.brokenBusId))} selectedId={selected}
-            onSelect={(id) => { if (reportable.some((bus) => bus.id === id)) setSelected(id); }} onMoveBroken={(id, lat, lng) => void moveBroken(id, lat, lng)} movableIds={movableIds} />
+          <FleetMap fleet={fleet} plans={Object.values(plans).filter((plan) => !dispatched.includes(plan.brokenBusId) && fleet.some((bus) => bus.id === plan.brokenBusId && bus.status === "BREAKDOWN"))} selectedId={selected}
+            onSelect={(id) => { if (reportable.some((bus) => bus.id === id)) setSelected(id); }} onMoveBroken={(id, lat, lng) => void moveBroken(id, lat, lng)} movableIds={movableIds} technicians={riders} />
         </div>
 
         <div className="space-y-4">
@@ -274,10 +359,15 @@ export default function TransportPanel() {
               </button>
             </div>
             <p className="mt-2 text-[11px] leading-5 text-slate-500">
-              You can report several breakdowns. Drag a red bus to change where it stopped, until its rescue is dispatched.
+              You can report several breakdowns. Each one opens a repair work order for operations. Drag a red bus to correct where it stopped, until help sets off.
             </p>
             {error && <p role="alert" className="mt-2 text-[11px] leading-5 text-red-700">{error}</p>}
           </div>
+
+          {returning.map((repair) => <div key={repair.id} className="rounded-lg border border-emerald-300 bg-emerald-50 p-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-emerald-800">✔ {repair.busName} · repaired</p>
+            <p className="mt-1 text-xs leading-5">{phaseText.RETURNING(repair, now)}</p>
+          </div>)}
 
           {brokenBuses.map((broken) => {
             const plan = plans[broken.id];
@@ -290,15 +380,24 @@ export default function TransportPanel() {
                   <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-amber-800">⚠ {broken.name} · {broken.routeName}</p>
                   <p className="mt-1 text-sm font-bold">{broken.occupied} student{broken.occupied === 1 ? "" : "s"} waiting</p>
                 </div>
-                <button type="button" onClick={() => repaired(broken.id)} disabled={enRoute.length > 0} className="rounded border border-emerald-300 bg-white px-2 py-1 text-[10px] font-semibold text-emerald-800 disabled:opacity-40">Mark repaired</button>
               </div>
+              {(() => {
+                const repair = repairFor(broken.id);
+                if (!repair) return <p className="mt-2 rounded bg-white p-2 text-[11px] leading-5 text-slate-500">Opening a repair work order...</p>;
+                const phase = repairPhase(repair, now);
+                return <div className="mt-2 rounded border border-violet-200 bg-white p-2 text-[11px] leading-5">
+                  <p className="font-semibold text-violet-900">Repair</p>
+                  <p>{phaseText[phase](repair, now)}</p>
+                  {canAssign && phase === "AWAITING_TECHNICIAN" && <Link href={`/work-orders?incident=${encodeURIComponent(repair.incidentId)}`} prefetch={false} className="mt-1 inline-block font-semibold text-amber-800 underline">Assign a technician →</Link>}
+                </div>;
+              })()}
 
               {isDispatched ? <>
                 {enRoute.length > 0 ? <ul className="mt-3 space-y-2">{enRoute.map((bus) => <li key={bus.id} className="rounded bg-white p-2 text-xs leading-5">
                   <b>{bus.name}</b> on the way to pick up {bus.rescueTarget?.seats} students
                   <br /><span className="text-slate-500">{bus.occupied}/{bus.capacity} on board now · {bus.driver}</span>
                 </li>)}</ul>
-                  : <p className="mt-3 text-xs leading-5">{broken.occupied ? `All rescue buses have arrived, but ${broken.occupied} students are still waiting.` : "Everyone has been picked up. Mark the bus repaired when it is fixed."}</p>}
+                  : <p className="mt-3 text-xs leading-5">{broken.occupied ? `All rescue buses have arrived, but ${broken.occupied} students are still waiting.` : "Everyone has been picked up. The bus stays here until the technician repairs it."}</p>}
                 {!enRoute.length && broken.occupied > 0 && <button type="button" onClick={() => void replan(broken.id)} className="mt-3 w-full rounded bg-[#142943] px-3 py-2 text-xs font-semibold text-white">Plan pickup for remaining {broken.occupied}</button>}
               </> : plan ? <>
                 <p className="mt-2 text-xs leading-5 text-[#172b46]">{plan.summary}</p>
@@ -357,7 +456,7 @@ export default function TransportPanel() {
                   <td className="px-4 py-3">{broken ? <span className="text-red-700">{bus.occupied} waiting</span> : <div className="flex items-center gap-2"><div className="h-1.5 w-20 rounded-full bg-slate-100"><div className="h-1.5 rounded-full bg-[#142943]" style={{ width: `${load}%` }} /></div><span>{bus.occupied}/{bus.capacity}</span></div>}</td>
                   <td className="px-4 py-3">{broken ? "—" : bus.rescueTarget ? `${bus.capacity - bus.occupied} (${bus.rescueTarget.seats} reserved)` : bus.capacity - bus.occupied}</td>
                   <td className="px-4 py-3 text-slate-600">{bus.driver}</td>
-                  <td className="px-4 py-3"><span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${broken ? "border-red-200 bg-red-50 text-red-700" : bus.status === "RESCUING" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{bus.status === "RESCUING" ? `Rescuing ${fleet.find((b) => b.id === bus.rescueTarget?.busId)?.name ?? ""}` : broken ? "Breakdown" : "Running"}</span></td>
+                  <td className="px-4 py-3"><span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${broken ? "border-red-200 bg-red-50 text-red-700" : bus.status === "RESCUING" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{bus.status === "RESCUING" ? `Rescuing ${fleet.find((b) => b.id === bus.rescueTarget?.busId)?.name ?? ""}` : bus.status === "RETURNING" ? "Repaired · returning" : broken ? "Breakdown" : "Running"}</span></td>
                 </tr>;
               })}
             </tbody>

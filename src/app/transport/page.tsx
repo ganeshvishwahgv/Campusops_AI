@@ -24,7 +24,7 @@ async function TransportContent() {
         <NotificationBell /><LogoutButton />
       </div>
     </header>
-    <section className="mx-auto max-w-[1500px] px-5 py-8 sm:px-8"><h1 className="text-3xl font-bold tracking-tight">Transportation and rescue</h1><p className="mt-3 mb-7 text-sm leading-7 text-slate-500">Follow the live fleet, handle breakdowns, and dispatch nearby buses with free seats.</p><TransportPanel /></section>
+    <section className="mx-auto max-w-[1500px] px-5 py-8 sm:px-8"><h1 className="text-3xl font-bold tracking-tight">Transportation and rescue</h1><p className="mt-3 mb-7 text-sm leading-7 text-slate-500">Follow the live fleet, handle breakdowns, and dispatch nearby buses with free seats.</p><TransportPanel canAssign={canViewDashboard(user.role)} /></section>
   </main>;
 }
 

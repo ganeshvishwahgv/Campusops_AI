@@ -633,7 +633,7 @@ export default function Dashboard({ user }: { user: CurrentUser }) {
             </>
           ) : (
             <>
-            <TransportPanel />
+            <TransportPanel canAssign />
             <details className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white">
               <summary className="cursor-pointer px-5 py-4 text-xs font-semibold">Saved campus vehicle records</summary>
               <div className="border-b border-slate-200 p-4">

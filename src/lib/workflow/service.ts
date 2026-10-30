@@ -237,8 +237,19 @@ async function notifyWorkflow(tx: Reader, event: {
 }) {
   const link = `/work-orders?incident=${encodeURIComponent(event.incidentId)}`;
   const reporterLink = `/complaints?complaint=${encodeURIComponent(event.incidentId)}`;
-  const { reporterId } = await tx.incident.findUniqueOrThrow({ where: { id: event.incidentId }, select: { reporterId: true } });
-  const reporter = reporterId === event.actor.id ? null : reporterId;
+  const { reporterId, busBreakdown } = await tx.incident.findUniqueOrThrow({ where: { id: event.incidentId }, select: { reporterId: true, busBreakdown: { select: { busName: true } } } });
+  if (busBreakdown) {
+    const bus = busBreakdown.busName;
+    const updates: Record<string, { title: string; body: string }> = {
+      ASSIGN: { title: `Technician assigned to ${bus}`, body: `${event.actor.name} sent a technician to repair ${bus}.` },
+      START: { title: `Technician riding out to ${bus}`, body: `${event.actor.name} is on the way by scooter. Follow them on the fleet map.` },
+      RESOLVE: { title: `${bus} repaired`, body: `${event.actor.name}: ${event.note} The bus is driving back to college.` },
+      BLOCK: { title: `${bus} repair blocked`, body: `${event.actor.name}: ${event.note}` },
+    };
+    const update = updates[event.action];
+    if (update) await notifyRoles(tx, ["TRANSPORT_ADMIN"], { kind: event.action === "RESOLVE" ? "BUS_REPAIRED" : "BUS_REPAIR_UPDATE", link: "/transport", ...update }, event.actor.id);
+  }
+  const reporter = reporterId === event.actor.id || busBreakdown ? null : reporterId;
   const plural = (count: number) => (count === 1 ? "" : "s");
   switch (event.action) {
     case "ASSIGN":
