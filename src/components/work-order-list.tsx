@@ -46,6 +46,15 @@ export function WorkOrderList({ revision, selectedId, technician, busy, onSelect
     event.preventDefault(); setPage(1); setQuery(search.trim()); setRetry((value) => value + 1);
   }
 
+  // The server returns a technician's work in queue order: current jobs first, then queued ones.
+  const queued = queue?.items.filter((item) => item.status === "ASSIGNED").map((item) => item.id) ?? [];
+  const working = queue?.items.some((item) => item.status === "IN_PROGRESS" || item.status === "BLOCKED") ?? false;
+  function queueLabel(id: string) {
+    const position = queued.indexOf(id);
+    if (position < 0) return "";
+    return position === 0 ? (working ? "Up next" : "Start now") : `Queue #${position + 1}`;
+  }
+
   return (
     <section aria-label={technician ? "My assigned work" : "Operations queue"} className="rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 p-5">
@@ -61,12 +70,13 @@ export function WorkOrderList({ revision, selectedId, technician, busy, onSelect
           {statusOptions.filter((item) => !technician || ["ALL", "ASSIGNED", "IN_PROGRESS", "BLOCKED", "RESOLVED", "CLOSED"].includes(item.value)).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
       </div>
+      {technician && queue && queue.items.some((item) => item.status === "ASSIGNED") && <p className="border-b border-slate-100 px-5 py-3 text-[11px] leading-5 text-slate-600">Jobs run in order: finish your current work, then start the next queued job.</p>}
       {error ? <div role="alert" className="p-6 text-sm leading-7 text-red-700">{error}<button type="button" onClick={() => setRetry((value) => value + 1)} className="mt-3 block text-xs font-semibold underline">Retry queue</button></div>
         : loading ? <p role="status" className="p-8 text-center text-sm text-slate-500">Loading work orders...</p>
         : !queue?.items.length ? <div className="p-8 text-center"><h3 className="text-sm font-semibold">No work orders found</h3><p className="mt-2 text-xs leading-6 text-slate-500">{query || status !== "ALL" ? "Try another search or status." : technician ? "Your assigned jobs will appear here when operations assigns work to you." : "New campus complaints will appear here for review."}</p></div>
         : <ul className="divide-y divide-slate-100">{queue.items.map((item) => <li key={item.id}>
           <button type="button" disabled={busy} onClick={() => onSelect(item.id)} aria-pressed={selectedId === item.id} className={`w-full border-l-4 px-5 py-5 text-left transition focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-amber-500 disabled:opacity-60 ${selectedId === item.id ? "border-amber-400 bg-amber-50/50" : "border-transparent hover:bg-slate-50"}`}>
-            <div className="flex flex-wrap gap-2"><WorkPriority value={item.priority} /><ComplaintStatus value={item.status} /></div>
+            <div className="flex flex-wrap gap-2"><WorkPriority value={item.priority} /><ComplaintStatus value={item.status} />{technician && queueLabel(item.id) && <span className="inline-flex rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-800">{queueLabel(item.id)}</span>}</div>
             <h3 className="mt-3 break-words text-sm font-bold leading-6">{item.title}</h3>
             <p className="mt-2 break-words text-xs leading-5 text-slate-500">{item.locationText ?? item.building?.name ?? "Location not specified"} · {readable(item.category)}</p>
             <p className="mt-2 text-xs text-slate-600">{item.assignee?.name ?? "Unassigned"}</p>

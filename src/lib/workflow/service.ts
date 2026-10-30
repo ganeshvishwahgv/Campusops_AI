@@ -9,6 +9,7 @@ import { privateJson } from "@/lib/auth/http";
 import { complaintErrorResponse, complaintSelect } from "@/lib/complaints/service";
 import { statusOptions } from "@/lib/complaints/types";
 import { validateAction, validateProfile, WorkflowError } from "./validation";
+import { notifyRoles, notifyUsers, operationsRoles } from "@/lib/notifications/service";
 
 type Reader = Prisma.TransactionClient;
 export const activeStatuses: IncidentStatus[] = ["ASSIGNED", "IN_PROGRESS", "BLOCKED"];
@@ -69,6 +70,14 @@ export async function listWorkOrders(user: CurrentUser, params: URLSearchParams)
     ...scope(user), ...(status === "ALL" ? {} : { status: status as IncidentStatus }),
     ...(q ? { OR: [{ id: { contains: q } }, { title: { contains: q } }, { locationText: { contains: q } }] } : {}),
   };
+  // A technician sees their own queue: current work first, then queued jobs in the order assigned.
+  if (!canViewDashboard(user.role)) {
+    const rows = await db.incident.findMany({ where, select: { ...workOrderSelect, history: false }, orderBy: [{ updatedAt: "asc" }, { id: "asc" }], take: 500 });
+    const rank = (status: string) => ["IN_PROGRESS", "BLOCKED", "ASSIGNED", "RESOLVED", "CLOSED"].indexOf(status) >>> 0;
+    rows.sort((a, b) => rank(a.status) - rank(b.status) || (rank(a.status) >= 3 ? b.updatedAt.getTime() - a.updatedAt.getTime() : 0));
+    const items = rows.slice((page - 1) * 20, page * 20).map((row) => ({ ...row, history: [] }));
+    return { items, total: rows.length, page, pageSize: 20, totalPages: Math.max(1, Math.ceil(rows.length / 20)) };
+  }
   // Enum names sort alphabetically in SQLite; use explicit priority buckets.
   return db.$transaction(async (tx) => {
     const counts = await tx.incident.groupBy({ by: ["priority"], where, _count: { _all: true } });
@@ -109,7 +118,9 @@ export async function technicians(tx: Reader = db, category?: string, excludeInc
     const reasons: string[] = [];
     if (!person.active) reasons.push("Account is inactive.");
     if (!onDuty) reasons.push("Off duty.");
-    if (category ? !skills.includes(category) : !skills.length) reasons.push(category ? `Missing ${category.toLowerCase()} skill.` : "No skills configured.");
+    // "OTHER" marks a general maintenance in-charge who can take any kind of job.
+    const qualified = category ? skills.includes(category) || skills.includes("OTHER") : skills.length > 0;
+    if (!qualified) reasons.push(category ? `Not listed for ${category.toLowerCase().replaceAll("_", " ")} jobs.` : "No job types configured.");
     if (profile?.availableFrom && profile.availableFrom > now) reasons.push("Availability window has not started.");
     if (profile?.availableUntil && profile.availableUntil <= now) reasons.push("Availability window has ended.");
     if (activeJobs >= maxActiveJobs) reasons.push("Workload limit reached.");
@@ -170,7 +181,7 @@ export async function performAction(actorId: string, incidentId: string, request
     }
     if (current.version !== input.expectedVersion) throw new WorkflowError(409, "This work order changed. Refresh and review the latest state before trying again.");
     const transitions: Record<typeof input.action, IncidentStatus[]> = {
-      TRIAGE: ["REPORTED", "NEEDS_CLARIFICATION", "TRIAGED"], ASSIGN: ["TRIAGED", "ASSIGNED", "IN_PROGRESS", "BLOCKED"],
+      TRIAGE: ["REPORTED", "NEEDS_CLARIFICATION", "TRIAGED"], ASSIGN: ["REPORTED", "NEEDS_CLARIFICATION", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "BLOCKED"],
       START: ["ASSIGNED"], BLOCK: ["ASSIGNED", "IN_PROGRESS"], RESUME: ["BLOCKED"],
       RESOLVE: ["IN_PROGRESS"], CLOSE: ["RESOLVED"], REOPEN: ["RESOLVED"],
     };
@@ -178,6 +189,7 @@ export async function performAction(actorId: string, incidentId: string, request
     const now = new Date();
     const data: Prisma.IncidentUncheckedUpdateManyInput = { version: { increment: 1 }, respondedAt: current.respondedAt ?? now };
     let nextAssigneeName = current.assignee?.name ?? null;
+    let queuedBehind = 0;
     if (input.action === "TRIAGE") {
       Object.assign(data, { category: input.category, priority: input.priority, status: "TRIAGED", assigneeId: null, blockedReason: null });
       nextAssigneeName = null;
@@ -187,6 +199,7 @@ export async function performAction(actorId: string, incidentId: string, request
       if (!candidate || !candidate.eligible) throw new WorkflowError(409, candidate ? `Technician cannot be assigned: ${candidate.reasons.join(" ")}` : "Choose an active qualified technician.");
       Object.assign(data, { assigneeId: candidate.id, status: "ASSIGNED", blockedReason: null, resolutionNote: null, resolvedAt: null, closedAt: null });
       nextAssigneeName = candidate.name;
+      queuedBehind = candidate.activeJobs;
     } else if (input.action === "START" || input.action === "RESUME") {
       const candidate = (await technicians(tx, current.category, incidentId)).find((person) => person.id === actorId);
       if (!candidate?.eligible) throw new WorkflowError(409, `Work cannot start now. ${candidate?.reasons.join(" ") ?? "Technician profile is unavailable."}`);
@@ -212,6 +225,46 @@ export async function performAction(actorId: string, incidentId: string, request
       fromAssigneeName: current.assignee?.name ?? null, toAssigneeName: nextAssigneeName,
       requestKey, requestHash, resultVersion: input.expectedVersion + 1,
     } });
+    await notifyWorkflow(tx, { action: input.action, incidentId, title: current.title, actor, note: input.note,
+      newAssigneeId: input.action === "ASSIGN" ? input.assigneeId ?? null : null, previousAssigneeId: current.assignee?.id ?? null, queuedBehind });
     return { workOrder: await getWorkOrder(actor, incidentId, tx), replayed: false };
   }, { timeout: 10000, maxWait: 10000 });
+}
+
+async function notifyWorkflow(tx: Reader, event: {
+  action: string; incidentId: string; title: string; actor: { id: string; name: string }; note: string;
+  newAssigneeId: string | null; previousAssigneeId: string | null; queuedBehind: number;
+}) {
+  const link = `/work-orders?incident=${encodeURIComponent(event.incidentId)}`;
+  const reporterLink = `/complaints?complaint=${encodeURIComponent(event.incidentId)}`;
+  const { reporterId } = await tx.incident.findUniqueOrThrow({ where: { id: event.incidentId }, select: { reporterId: true } });
+  const reporter = reporterId === event.actor.id ? null : reporterId;
+  const plural = (count: number) => (count === 1 ? "" : "s");
+  switch (event.action) {
+    case "ASSIGN":
+      await notifyUsers(tx, [event.newAssigneeId], { kind: "TASK_ASSIGNED", link,
+        title: `New job assigned: ${event.title}`,
+        body: `${event.actor.name} assigned ${event.incidentId} to you. ${event.queuedBehind ? `It is queued after your ${event.queuedBehind} current job${plural(event.queuedBehind)}.` : "You can start it now."} Note: ${event.note}` });
+      if (event.previousAssigneeId && event.previousAssigneeId !== event.newAssigneeId) {
+        await notifyUsers(tx, [event.previousAssigneeId], { kind: "TASK_REASSIGNED", link, title: `Job reassigned: ${event.title}`, body: `${event.incidentId} was moved to another technician by ${event.actor.name}.` });
+      }
+      await notifyUsers(tx, [reporter], { kind: "COMPLAINT_UPDATE", link: reporterLink, title: "A technician is assigned to your report", body: `"${event.title}" has been assigned for repair.` });
+      break;
+    case "START":
+      await notifyUsers(tx, [reporter], { kind: "COMPLAINT_UPDATE", link: reporterLink, title: "Work has started on your report", body: `${event.actor.name} started work on "${event.title}".` });
+      break;
+    case "BLOCK":
+      await notifyRoles(tx, operationsRoles, { kind: "WORK_BLOCKED", link, title: `Work blocked: ${event.title}`, body: `${event.actor.name}: ${event.note}` }, event.actor.id);
+      break;
+    case "RESOLVE":
+      await notifyUsers(tx, [reporter], { kind: "COMPLAINT_RESOLVED", link: reporterLink, title: "Your reported issue is resolved", body: `"${event.title}" was fixed by ${event.actor.name}. ${event.note}` });
+      await notifyRoles(tx, operationsRoles, { kind: "WORK_RESOLVED", link, title: `${event.actor.name} resolved ${event.incidentId}`, body: `"${event.title}": ${event.note} Verify and close it in work orders.` }, event.actor.id);
+      break;
+    case "CLOSE":
+      await notifyUsers(tx, [reporter], { kind: "COMPLAINT_CLOSED", link: reporterLink, title: "Your report is closed", body: `Operations verified the fix for "${event.title}".` });
+      break;
+    case "REOPEN":
+      await notifyUsers(tx, [reporter], { kind: "COMPLAINT_UPDATE", link: reporterLink, title: "Your report was reopened", body: `"${event.title}" needs more work. ${event.note}` });
+      break;
+  }
 }

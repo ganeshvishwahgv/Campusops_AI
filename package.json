@@ -13,7 +13,8 @@
     "db:migrate": "npm run db:backup && prisma migrate deploy --config prisma7.config.ts && prisma generate --config prisma7.config.ts",
     "test:auth": "tsx --test --test-concurrency=1 tests/auth.test.ts tests/origin.test.ts",
     "db:rooms": "npm run db:backup && tsx prisma/add-rooms.ts",
-    "db:team": "npm run db:backup && tsx prisma/demo-team.ts"
+    "db:team": "npm run db:backup && tsx prisma/demo-team.ts",
+    "db:demo": "npm run db:backup && tsx prisma/demo-presentation.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

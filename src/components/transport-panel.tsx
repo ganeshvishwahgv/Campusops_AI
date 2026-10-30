@@ -48,6 +48,7 @@ export default function TransportPanel() {
   const [error, setError] = useState("");
   const [events, setEvents] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
+  const [randomBreakdowns, setRandomBreakdowns] = useState(false);
   const latest = useRef(fleet);
   useEffect(() => { latest.current = fleet; }, [fleet]);
 
@@ -105,18 +106,51 @@ export default function TransportPanel() {
     } catch (cause) { setError(requestError(cause)); }
   }
 
-  async function reportBreakdown() {
-    const bus = latest.current.find((b) => b.id === selected && b.status === "RUNNING");
+  // Tell transport admins (via notifications) that a bus has stopped.
+  function alertBreakdown(bus: Bus, source: "AUTO" | "MANUAL") {
+    void fetch("/api/transport/alerts", {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ busName: bus.name, routeName: bus.routeName, driver: bus.driver, students: bus.occupied, source }),
+    }).catch(() => undefined);
+  }
+
+  async function breakDown(busId: string, source: "AUTO" | "MANUAL") {
+    const bus = latest.current.find((b) => b.id === busId && b.status === "RUNNING");
     if (!bus) return;
-    setError(""); setBusy("report");
     const updated = latest.current.map((b) => (b.id === bus.id ? { ...b, status: "BREAKDOWN" as const } : b));
     commit(updated);
-    log(`${bus.name} reported broken down with ${bus.occupied} students.`);
+    log(source === "AUTO" ? `🚨 ${bus.name} broke down while running on ${bus.routeName} (${bus.occupied} students).` : `${bus.name} reported broken down with ${bus.occupied} students.`);
+    alertBreakdown(bus, source);
     await refreshPending(updated, dispatched);
-    setBusy(null);
-    const nextRunning = updated.find((b) => b.status === "RUNNING");
-    if (nextRunning) setSelected(nextRunning.id);
+    if (selected === bus.id) {
+      const nextRunning = updated.find((b) => b.status === "RUNNING");
+      if (nextRunning) setSelected(nextRunning.id);
+    }
   }
+
+  async function reportBreakdown() {
+    setError(""); setBusy("report");
+    await breakDown(selected, "MANUAL");
+    setBusy(null);
+  }
+
+  // Demo mode: every 45–90 seconds a moving bus with students on board may break down.
+  const breakDownRef = useRef(breakDown);
+  useEffect(() => { breakDownRef.current = breakDown; });
+  useEffect(() => {
+    if (!randomBreakdowns || paused) return;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        const running = latest.current.filter((b) => b.status === "RUNNING" && b.occupied > 0);
+        if (running.length > 1) void breakDownRef.current(running[Math.floor(Math.random() * running.length)].id, "AUTO");
+        schedule();
+      }, 45_000 + Math.random() * 45_000);
+    };
+    schedule();
+    return () => window.clearTimeout(timer);
+  }, [randomBreakdowns, paused]);
+
 
   // Dragging a broken bus recalculates its plan from the new spot.
   async function moveBroken(id: string, lat: number, lng: number) {
@@ -212,6 +246,7 @@ export default function TransportPanel() {
               <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-slate-500">Report a breakdown</p>
               <button type="button" onClick={() => setPaused((value) => !value)} className="text-[11px] font-semibold text-amber-800 hover:underline">{paused ? "Resume simulation" : "Pause simulation"}</button>
             </div>
+            <label className="mt-3 flex items-center gap-2 text-[11px] text-slate-600"><input type="checkbox" checked={randomBreakdowns} onChange={(event) => setRandomBreakdowns(event.target.checked)} className="accent-red-600" />Random breakdowns while driving (demo drill, alerts transport admins)</label>
             <select
               aria-label="Bus to report"
               value={reportable.some((b) => b.id === selected) ? selected : ""}

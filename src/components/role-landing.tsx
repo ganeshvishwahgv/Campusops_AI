@@ -2,6 +2,7 @@ import type { Role } from "@/generated/prisma/enums";
 import type { CurrentUser } from "@/lib/auth/session";
 import { roleLabels } from "@/lib/auth/permissions";
 import { LogoutButton } from "@/components/logout-button";
+import { NotificationBell } from "@/components/notification-bell";
 import { SessionMonitor } from "@/components/session-monitor";
 
 const upcoming: Partial<Record<Role, { title: string; description: string }>> = {
@@ -16,7 +17,7 @@ export function RoleLanding({ user }: { user: CurrentUser }) {
       <SessionMonitor />
       <header className="flex flex-wrap items-center justify-between gap-5 bg-[#142943] px-6 py-5 text-white sm:px-10">
         <div><span className="text-xl font-black tracking-tight">CAMPUS<span className="text-amber-400">/</span>OPS</span><p className="mt-1 text-[10px] text-slate-300">Easwari Engineering College</p></div>
-        <div className="flex items-center gap-5"><div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div><LogoutButton /></div>
+        <div className="flex items-center gap-5"><div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div><NotificationBell /><LogoutButton /></div>
       </header>
       <section className="mx-auto max-w-3xl px-6 py-16 sm:py-24">
         <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-amber-700">Signed in · {roleLabels[user.role]}</p>

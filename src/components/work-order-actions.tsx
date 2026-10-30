@@ -8,7 +8,7 @@ import { newWorkflowKey, workButton, workInput, workLabel } from "./work-order-s
 
 const actions: Record<string, { label: string; submit: string; help: string }> = {
   TRIAGE: { label: "Review and triage", submit: "Save review", help: "Confirm the issue type and operations priority before assigning a technician." },
-  ASSIGN: { label: "Assign or reassign technician", submit: "Assign work", help: "Choose an available technician with the right skill and capacity. Reassignment returns this job to Assigned." },
+  ASSIGN: { label: "Assign technician / in-charge", submit: "Assign work", help: "Choose a technician on duty. If they are already working on something, this job joins their queue and starts after their current work." },
   START: { label: "Start work", submit: "Start work", help: "Confirm that you are beginning this assigned job." },
   BLOCK: { label: "Report a blocker", submit: "Mark blocked", help: "Explain what is preventing the work and what is needed to continue." },
   RESUME: { label: "Resume work", submit: "Resume work", help: "Confirm that the blocker has been cleared and work can continue." },
@@ -24,7 +24,7 @@ function availableActions(status: string, technician: boolean): string[] {
     if (status === "BLOCKED") return ["RESUME"];
     return [];
   }
-  if (["REPORTED", "NEEDS_CLARIFICATION"].includes(status)) return ["TRIAGE"];
+  if (["REPORTED", "NEEDS_CLARIFICATION"].includes(status)) return ["ASSIGN", "TRIAGE"];
   if (status === "TRIAGED") return ["ASSIGN", "TRIAGE"];
   if (["ASSIGNED", "IN_PROGRESS", "BLOCKED"].includes(status)) return ["ASSIGN"];
   if (status === "RESOLVED") return ["CLOSE", "REOPEN"];
@@ -132,7 +132,7 @@ export function WorkOrderActions({ workOrder, technician, refreshing, onSaved, o
             const disabled = !person.eligible || current;
             return <label key={person.id} className={`flex items-start gap-3 rounded border bg-white p-3 ${disabled ? "border-slate-200 opacity-65" : assigneeId === person.id ? "border-amber-500 ring-1 ring-amber-200" : "cursor-pointer border-slate-300"}`}>
               <input type="radio" name="technician" value={person.id} disabled={disabled} checked={assigneeId === person.id} onChange={() => setAssigneeId(person.id)} className="mt-1 accent-amber-600" />
-              <span className="min-w-0"><span className="block text-xs font-semibold">{person.name}{current ? " · current assignee" : ""}</span><span className="mt-1 block text-[11px] leading-5 text-slate-500">{person.department ?? "No department"} · {person.activeJobs}/{person.maxActiveJobs} active jobs</span><span className="block text-[11px] leading-5 text-slate-500">{person.skills.length ? person.skills.map(readable).join(", ") : "Skills not configured"}</span>{person.reasons.length > 0 && <span className="mt-1 block text-[11px] leading-5 text-amber-800">{person.reasons.join(" · ")}</span>}</span>
+              <span className="min-w-0"><span className="block text-xs font-semibold">{person.name}{current ? " · current assignee" : ""}</span><span className="mt-1 block text-[11px] leading-5 text-slate-500">{person.department ?? "No department"} · {person.activeJobs ? `${person.activeJobs} job${person.activeJobs === 1 ? "" : "s"} in hand · this would be queue #${person.activeJobs + 1}` : "Free now · can start immediately"}</span><span className="block text-[11px] leading-5 text-slate-500">{person.skills.length ? person.skills.map(readable).join(", ") : "Skills not configured"}</span>{person.reasons.length > 0 && <span className="mt-1 block text-[11px] leading-5 text-amber-800">{person.reasons.join(" · ")}</span>}</span>
             </label>;
           })}</div>}
           {!candidateLoading && candidates.length > 0 && !candidates.some((person) => person.eligible && person.id !== workOrder.assignee?.id) && <p className="mt-3 text-xs leading-6 text-amber-800">No eligible replacement is currently available. Check skills, duty hours, and capacity in Workforce.</p>}

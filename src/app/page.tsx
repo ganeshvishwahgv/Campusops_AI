@@ -11,6 +11,7 @@ async function AuthenticatedWorkspace() {
   if (user.role === "STUDENT" || user.role === "FACULTY") redirect("/complaints");
   if (user.role === "TECHNICIAN") redirect("/work-orders");
   if (user.role === "DEPARTMENT_MANAGER") redirect("/bookings");
+  if (user.role === "TRANSPORT_ADMIN") redirect("/transport");
 
   return canViewDashboard(user.role)
     ? <Dashboard user={user} />

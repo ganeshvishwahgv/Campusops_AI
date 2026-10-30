@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { clearSessionCookie, getCurrentUser } from "./session";
-import { canViewDashboard } from "./permissions";
+import { canManageTransport, canViewDashboard } from "./permissions";
 import { mutationOriginError } from "./origin";
 
 export function privateJson(body: unknown, status = 200) {
@@ -20,6 +20,19 @@ export async function authorizeDashboard() {
   }
   if (!canViewDashboard(user.role)) {
     return { response: privateJson({ error: "Your role cannot access the operations dashboard." }, 403), user: null };
+  }
+  return { response: null, user };
+}
+
+export async function authorizeTransport() {
+  const user = await getCurrentUser();
+  if (!user) {
+    const response = privateJson({ error: "Please sign in to continue." }, 401);
+    clearSessionCookie(response);
+    return { response, user: null };
+  }
+  if (!canManageTransport(user.role)) {
+    return { response: privateJson({ error: "Your role cannot access transport operations." }, 403), user: null };
   }
   return { response: null, user };
 }

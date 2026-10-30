@@ -9,6 +9,7 @@ import { privateJson, RequestBodyError } from "@/lib/auth/http";
 import { ComplaintError, validateComplaint } from "./validation";
 import { statusOptions } from "./types";
 import { historyQuery } from "@/lib/workflow/history";
+import { notifyRoles, operationsRoles } from "@/lib/notifications/service";
 
 // Reporter details include public workflow notes and actor/priority snapshots.
 // Internal IDs, request fingerprints and other reporters' records stay private.
@@ -118,6 +119,11 @@ export async function submitComplaint(reporterId: string, submissionKey: string,
       },
       select: complaintSelect,
     });
+    const notice = { kind: "NEW_COMPLAINT", link: `/work-orders?incident=${encodeURIComponent(complaint.id)}`,
+      title: `New ${input.reportedUrgency.toLowerCase()}-urgency report from ${activeUser.name}`,
+      body: `${input.title} · ${complaint.locationText}. Assign a technician in work orders.` };
+    await notifyRoles(tx, operationsRoles, notice, activeUser.id);
+    if (input.category === "TRANSPORT") await notifyRoles(tx, ["TRANSPORT_ADMIN"], { ...notice, kind: "TRANSPORT_REPORT", link: "/transport" }, activeUser.id);
     return { complaint, replayed: false };
   });
 }

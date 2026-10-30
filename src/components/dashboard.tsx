@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { CurrentUser } from "@/lib/auth/session";
 import { roleLabels } from "@/lib/auth/permissions";
 import { LogoutButton } from "@/components/logout-button";
+import { NotificationBell } from "@/components/notification-bell";
 import TransportPanel from "@/components/transport-panel";
 import { IncidentOverview } from "@/components/incident-overview";
 import { RoomRecovery } from "@/components/room-recovery";
@@ -284,7 +285,7 @@ export default function Dashboard({ user }: { user: CurrentUser }) {
             <p className="text-xs font-semibold">{user.name}</p>
             <p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p>
           </div>
-          <LogoutButton />
+          <NotificationBell /><LogoutButton />
         </div>
       </header>
 

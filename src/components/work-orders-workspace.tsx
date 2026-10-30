@@ -7,6 +7,7 @@ import { roleLabels } from "@/lib/auth/permissions";
 import type { WorkOrder } from "@/lib/workflow/types";
 import { complaintRequest, requestError } from "./complaint-shared";
 import { LogoutButton } from "./logout-button";
+import { NotificationBell } from "@/components/notification-bell";
 import { SessionMonitor } from "./session-monitor";
 import { WorkOrderList } from "./work-order-list";
 import { WorkOrderDetail } from "./work-order-detail";
@@ -70,7 +71,7 @@ export function WorkOrdersWorkspace({ user, initialId }: { user: CurrentUser; in
         <div className="flex flex-wrap items-center gap-5">
           {!technician && <><Link href="/" prefetch={false} className="text-xs font-semibold text-amber-300 hover:underline">Operations dashboard</Link><Link href="/complaints" prefetch={false} className="text-xs font-semibold text-amber-300 hover:underline">My complaints</Link></>}
           {!technician && <Link href="/bookings" prefetch={false} className="text-xs font-semibold text-amber-300 hover:underline">Room bookings</Link>}
-          <div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div><LogoutButton />
+          <div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div><NotificationBell /><LogoutButton />
         </div>
       </header>
       <div className="mx-auto max-w-7xl px-6 py-9 sm:px-10 sm:py-12">

@@ -8,6 +8,7 @@ export const roleLabels: Record<Role, string> = {
   FACILITIES_ADMIN: "Facilities admin",
   PROCUREMENT_APPROVER: "Procurement approver",
   SYSTEM_ADMIN: "System admin",
+  TRANSPORT_ADMIN: "Transport admin",
 };
 
 // Deny by default until scoped modules and their backend policies exist.
@@ -27,4 +28,9 @@ export function canAccessWorkOrders(role: string): boolean {
 
 export function canAccessBookings(role: string): boolean {
   return canViewDashboard(role) || role === "FACULTY" || role === "DEPARTMENT_MANAGER";
+}
+
+// Transport admins run the fleet map, breakdown reports and rescue dispatch.
+export function canManageTransport(role: string): boolean {
+  return canViewDashboard(role) || role === "TRANSPORT_ADMIN";
 }

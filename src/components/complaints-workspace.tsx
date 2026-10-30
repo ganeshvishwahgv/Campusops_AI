@@ -10,6 +10,7 @@ import { ComplaintList } from "./complaint-list";
 import { ComplaintDetail } from "./complaint-detail";
 import { complaintRequest, requestError } from "./complaint-shared";
 import { LogoutButton } from "./logout-button";
+import { NotificationBell } from "@/components/notification-bell";
 import { SessionMonitor } from "./session-monitor";
 
 export function ComplaintsWorkspace({ user }: { user: CurrentUser }) {
@@ -104,7 +105,7 @@ export function ComplaintsWorkspace({ user }: { user: CurrentUser }) {
           {canViewDashboard(user.role) && <Link href="/work-orders" prefetch={false} className="text-xs font-semibold text-amber-300 underline-offset-4 hover:underline">Work orders</Link>}
           {canAccessBookings(user.role) && <Link href="/bookings" prefetch={false} className="text-xs font-semibold text-amber-300 underline-offset-4 hover:underline">Room bookings</Link>}
           <div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div>
-          <LogoutButton />
+          <NotificationBell /><LogoutButton />
         </div>
       </header>
 

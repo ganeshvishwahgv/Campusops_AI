@@ -1,4 +1,4 @@
-import { authorizeDashboard, checkMutationOrigin, privateJson, readJsonBody } from "@/lib/auth/http";
+import { authorizeTransport, checkMutationOrigin, privateJson, readJsonBody } from "@/lib/auth/http";
 import { complaintErrorResponse } from "@/lib/complaints/service";
 import { ComplaintError } from "@/lib/complaints/validation";
 import { findRescuePlan } from "@/lib/transport/rescue";
@@ -6,7 +6,7 @@ import { parseFleet } from "@/lib/transport/validation";
 
 export async function POST(request: Request) {
   try {
-    const { response } = await authorizeDashboard();
+    const { response } = await authorizeTransport();
     if (response) return response;
     const rejected = checkMutationOrigin(request);
     if (rejected) return rejected;

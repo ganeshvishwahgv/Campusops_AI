@@ -7,6 +7,7 @@ import { canAccessComplaints, canViewDashboard, roleLabels } from "@/lib/auth/pe
 import type { Booking } from "@/lib/bookings/types";
 import { complaintRequest, requestError } from "./complaint-shared";
 import { LogoutButton } from "./logout-button";
+import { NotificationBell } from "@/components/notification-bell";
 import { SessionMonitor } from "./session-monitor";
 import { workButton } from "./work-order-shared";
 import { BookingList } from "./booking-list";
@@ -69,7 +70,7 @@ export function BookingsWorkspace({ user, initialId, initialIncident }: {
     <header className="flex flex-wrap items-center justify-between gap-5 bg-[#142943] px-6 py-5 text-white sm:px-10"><div><span className="text-xl font-black tracking-tight">CAMPUS<span className="text-amber-400">/</span>OPS</span><p className="mt-1 text-[10px] text-slate-300">Easwari Engineering College</p></div><div className="flex flex-wrap items-center gap-5">
       {admin && <><Link href="/" prefetch={false} className="text-xs font-semibold text-amber-300 hover:underline">Operations dashboard</Link><Link href="/work-orders" prefetch={false} className="text-xs font-semibold text-amber-300 hover:underline">Work orders</Link></>}
       {canAccessComplaints(user.role) && <Link href="/complaints" prefetch={false} className="text-xs font-semibold text-amber-300 hover:underline">My complaints</Link>}
-      <div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div><LogoutButton />
+      <div className="text-right"><p className="text-xs font-semibold">{user.name}</p><p className="mt-1 text-[10px] text-slate-300">{roleLabels[user.role]}</p></div><NotificationBell /><LogoutButton />
     </div></header>
     <div className="mx-auto max-w-7xl px-6 py-9 sm:px-10 sm:py-12">
       <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700">Campus spaces</p>
